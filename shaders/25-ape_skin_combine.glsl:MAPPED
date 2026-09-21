@@ -1,0 +1,51 @@
+#define MAPPED
+
+//! bundle game
+
+precision highp float;
+#ifdef VERTEX
+#define varying out
+#else
+#define varying in
+#endif
+uniform mat4 u_mvp;
+uniform vec4 u_index;
+uniform sampler2D u_blendTex;
+uniform sampler2D u_baseTex;
+uniform sampler2D u_overlayTex;
+uniform sampler2D u_mapTex;
+uniform bool u_isDiffuseSet;
+uniform bool u_multiplyDiffuse;
+#ifdef VERTEX
+in vec3 a_position;
+void main() {
+vec4 vertexPos = vec4(a_position.xy, 0, 1);
+gl_Position = vertexPos;
+}
+#endif
+#ifdef FRAGMENT
+out vec4 o_color;
+void main() {
+vec4 base = texelFetch(u_baseTex, ivec2(gl_FragCoord.xy), 0);
+#ifdef MAPPED
+vec4 m = texelFetch(u_mapTex, ivec2(gl_FragCoord.xy), 0);
+vec2 uv = vec2(m.r * 255.0 * 256.0 + m.b * 255.0, m.g * 255.0 * 256.0 + m.a * 255.0) / 65535.0;
+bool mapped = m.r + m.g + m.b + m.a > 0.0;
+vec2 at = vec2(uv.x, 1.0 - uv.y);
+float blend = mapped ? textureLod(u_blendTex, at, 0.0).a : 0.0;
+vec4 overlay = mapped ? textureLod(u_overlayTex, at, 0.0) : base;
+#else
+float blend = texelFetch(u_blendTex, ivec2(gl_FragCoord.xy), 0).a;
+vec4 overlay = texelFetch(u_overlayTex, ivec2(gl_FragCoord.xy), 0);
+#endif
+if (u_isDiffuseSet) {
+vec3 color = u_multiplyDiffuse
+? base.rgb * overlay.rgb
+: mix(base.rgb, overlay.rgb, blend);
+float alpha = max(base.a, blend);
+o_color = vec4(color, alpha);
+} else {
+o_color = mix(base, overlay, blend);
+}
+}
+#endif

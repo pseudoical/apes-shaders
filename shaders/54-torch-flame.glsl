@@ -1,0 +1,87 @@
+
+//! bundle game
+//! queue opaque
+//! zwrite on
+//! ztest on
+//! cull back
+
+precision highp float;
+uniform mat4 u_model;
+uniform mat4 u_mvp;
+uniform mat4 u_vp;
+uniform vec4 u_color;
+#ifdef FRAGMENT
+layout(location = 0) out vec4 o_color;
+layout(location = 1) out vec4 o_normal;
+float signNotZero(in float k) {
+return (k >= 0.0) ? 1.0 : -1.0;
+}
+vec2 signNotZero(in vec2 v) {
+return vec2(signNotZero(v.x), signNotZero(v.y));
+}
+vec2 octEncode(in vec3 v) {
+float l1norm = abs(v.x) + abs(v.y) + abs(v.z);
+vec2 result = v.xy * (1.0 / l1norm);
+if (v.z < 0.0) {
+result = (1.0 - abs(result.yx)) * signNotZero(result.xy);
+}
+return result * 0.5+0.5;
+}
+void write_gbuffer(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+void write_gbuffer_ground(vec3 color, vec3 normal, vec4 data, int lod){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4 | 1u<<7, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,float(lod)/255.0,pack.y);
+}
+void write_gbuffer_ape(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | 1u<<3 | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+#endif
+#ifdef VERTEX
+in vec3 a_position;
+in vec3 a_normal;
+#ifdef INSTANCED
+in mat4 a_instance_model;
+in vec4 a_instance_data;
+flat out vec3 v_color;
+#endif
+out vec3 v_normal;
+void main() {
+#ifdef INSTANCED
+mat4 model = a_instance_model;
+mat4 mvp = u_vp * a_instance_model;
+v_color = a_instance_data.rgb;
+#else
+mat4 model = u_model;
+mat4 mvp = u_mvp;
+#endif
+v_normal = normalize((model * vec4(a_normal, 0.0)).xyz);
+gl_Position = mvp * vec4(a_position, 1.0);
+}
+#endif
+#ifdef FRAGMENT
+in vec3 v_normal;
+#ifdef INSTANCED
+flat in vec3 v_color;
+#endif
+void main() {
+#ifdef INSTANCED
+vec3 color = v_color;
+#else
+vec3 color = u_color.rgb;
+#endif
+write_gbuffer(color, normalize(v_normal), vec4(0.2, 0.0, 1.0, 1.0));
+}
+#endif

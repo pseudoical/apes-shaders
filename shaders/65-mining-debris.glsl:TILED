@@ -1,0 +1,177 @@
+#define TILED
+
+//! bundle game
+//! queue opaque
+//! zwrite on
+//! ztest on
+//! cull back
+
+
+
+precision highp float;
+uniform mat4 u_model;
+uniform mat4 u_mvp;
+uniform mat4 u_vp;
+uniform vec4 u_color;
+uniform int u_material_code;
+uniform float u_texel_density;
+uniform float u_texel_grain;
+uniform sampler2D u_atlas;
+uniform sampler2D u_variant_codes;
+uniform sampler2D u_variants;
+uniform mat4 u_icon_view;
+uniform vec3 u_icon_light;
+uniform float u_icon_ambient;
+uniform vec4 u_icon_emissive;
+#ifdef FRAGMENT
+layout(location = 0) out vec4 o_color;
+layout(location = 1) out vec4 o_normal;
+float signNotZero(in float k) {
+return (k >= 0.0) ? 1.0 : -1.0;
+}
+vec2 signNotZero(in vec2 v) {
+return vec2(signNotZero(v.x), signNotZero(v.y));
+}
+vec2 octEncode(in vec3 v) {
+float l1norm = abs(v.x) + abs(v.y) + abs(v.z);
+vec2 result = v.xy * (1.0 / l1norm);
+if (v.z < 0.0) {
+result = (1.0 - abs(result.yx)) * signNotZero(result.xy);
+}
+return result * 0.5+0.5;
+}
+void write_gbuffer(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+void write_gbuffer_ground(vec3 color, vec3 normal, vec4 data, int lod){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4 | 1u<<7, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,float(lod)/255.0,pack.y);
+}
+void write_gbuffer_ape(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | 1u<<3 | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+#endif
+#ifdef VERTEX
+in vec3 a_position;
+in vec3 a_normal;
+#ifdef INSTANCED
+in mat4 a_instance_model;
+in vec4 a_instance_data;
+flat out float v_material_code;
+#endif
+out vec3 v_world_pos;
+out vec3 v_face_normal;
+out vec3 v_object_pos;
+out vec3 v_object_normal;
+void main() {
+#ifdef INSTANCED
+mat4 model=a_instance_model;
+mat4 mvp=u_vp*a_instance_model;
+v_material_code=a_instance_data.x;
+#elif defined(ICON)
+mat4 model=u_icon_view;
+mat4 mvp=u_model;
+#else
+mat4 model=u_model;
+mat4 mvp=u_mvp;
+#endif
+vec4 world_pos=model*vec4(a_position,1.0);
+v_world_pos=world_pos.xyz;
+v_face_normal=normalize((model*vec4(a_normal,0.0)).xyz);
+v_object_pos=a_position;
+v_object_normal=a_normal;
+gl_Position=mvp*vec4(a_position,1.0);
+}
+#endif
+#ifdef FRAGMENT
+in vec3 v_world_pos;
+in vec3 v_face_normal;
+in vec3 v_object_pos;
+in vec3 v_object_normal;
+#ifdef INSTANCED
+flat in float v_material_code;
+#endif
+uint baseMaterialCode(uint code) {
+vec4 codes=texelFetch(u_variant_codes,ivec2(int(code>>2u),0),0);
+return uint(floor(codes[int(code&3u)]*255.0+0.5));
+}
+void applyMaterialVariant(uint code,inout vec4 color,inout vec4 data) {
+color*=texelFetch(u_variants,ivec2(0,int(code)),0);
+color+=texelFetch(u_variants,ivec2(1,int(code)),0);
+data*=texelFetch(u_variants,ivec2(2,int(code)),0);
+data+=texelFetch(u_variants,ivec2(3,int(code)),0);
+}
+vec4 debrisMaterial(out vec4 data) {
+#ifdef INSTANCED
+uint code=uint(max(v_material_code+0.5,0.0));
+#else
+uint code=uint(max(u_material_code,0));
+#endif
+uint base_code=baseMaterialCode(code);
+ivec2 atlas_size=textureSize(u_atlas,0);
+ivec2 material_size=atlas_size/ivec2(16,4);
+ivec2 material_origin=ivec2(int(base_code%16u),int(base_code/16u))*material_size;
+vec3 n=abs(v_object_normal);
+vec2 face_pos;
+int tile;
+if(n.x>=n.y && n.x>=n.z){ face_pos=v_object_pos.yz; tile=4; }
+else if(n.y>=n.z){ face_pos=v_object_pos.xz; tile=1; }
+else { face_pos=v_object_pos.xy; tile=0; }
+#ifdef TILED
+vec2 wrapped=fract(face_pos*u_texel_density/64.0)*64.0;
+ivec2 pixel=clamp(ivec2(floor(wrapped)),ivec2(0),ivec2(63));
+ivec2 texel=material_origin+ivec2(0,tile*64)+pixel;
+vec4 color=texelFetch(u_atlas,texel,0);
+float grain=fract(sin(dot(vec2(texel),vec2(12.9898,78.233)))*43758.5453);
+color.rgb*=1.0-0.5*u_texel_grain+u_texel_grain*grain;
+#else
+ivec2 pixel=ivec2(floor((face_pos+vec2(1.0))*4.0));
+pixel=clamp(pixel,ivec2(0),ivec2(7));
+ivec2 texel=material_origin+ivec2(24,tile*64+24)+pixel;
+vec4 color=texelFetch(u_atlas,texel,0);
+#endif
+data=vec4(0.85,0.0,0.0,1.0);
+applyMaterialVariant(code,color,data);
+return color;
+}
+vec3 renderedFaceNormal() {
+vec3 normal=cross(dFdx(v_world_pos),dFdy(v_world_pos));
+float length_squared=dot(normal,normal);
+if(length_squared<1e-12){
+return normalize(v_face_normal);
+}
+normal*=inversesqrt(length_squared);
+return dot(normal,v_face_normal)<0.0 ? -normal : normal;
+}
+void main() {
+#ifdef ICON
+vec3 color;
+if(u_icon_emissive.a>0.5){
+color=u_icon_emissive.rgb;
+} else {
+vec4 material_data;
+vec4 material=debrisMaterial(material_data);
+vec3 normal=renderedFaceNormal();
+float diffuse=max(dot(normal,normalize(u_icon_light)),0.0);
+float rim=0.5+0.5*normal.y;
+color=material.rgb*(u_icon_ambient+0.62*diffuse+0.12*rim);
+}
+o_color=vec4(color,1.0);
+#else
+vec4 material_data;
+vec4 material=debrisMaterial(material_data);
+write_gbuffer(material.rgb,renderedFaceNormal(),material_data);
+#endif
+}
+#endif

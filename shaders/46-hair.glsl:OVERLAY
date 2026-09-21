@@ -1,0 +1,204 @@
+#define OVERLAY
+
+//! bundle game
+//! queue opaque
+//! zwrite on
+//! ztest on
+//! cull off
+
+
+precision highp float;
+uniform mat4 u_model;
+uniform mat4 u_mvp;
+uniform mat4 u_vp;
+uniform vec4 u_color;
+#ifdef OVERLAY
+#ifdef FRAGMENT
+layout(location = 0) out vec4 o_color;
+uniform highp sampler3D u_lut;
+#endif
+#else
+#ifdef FRAGMENT
+layout(location = 0) out vec4 o_color;
+layout(location = 1) out vec4 o_normal;
+float signNotZero(in float k) {
+return (k >= 0.0) ? 1.0 : -1.0;
+}
+vec2 signNotZero(in vec2 v) {
+return vec2(signNotZero(v.x), signNotZero(v.y));
+}
+vec2 octEncode(in vec3 v) {
+float l1norm = abs(v.x) + abs(v.y) + abs(v.z);
+vec2 result = v.xy * (1.0 / l1norm);
+if (v.z < 0.0) {
+result = (1.0 - abs(result.yx)) * signNotZero(result.xy);
+}
+return result * 0.5+0.5;
+}
+void write_gbuffer(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+void write_gbuffer_ground(vec3 color, vec3 normal, vec4 data, int lod){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4 | 1u<<7, (uint(data.b *7.0)&7u) | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,float(lod)/255.0,pack.y);
+}
+void write_gbuffer_ape(vec3 color, vec3 normal, vec4 data){
+uvec2 data_int = uvec2((uint(data.r*15.0)&15u) | (uint(data.g*7.0)&7u)<<4, (uint(data.b *7.0)&7u) | 1u<<3 | (uint(data.a *15.0) & 15u) << 4);
+vec2 pack = vec2(data_int)/255.0;
+o_color = vec4(color,pack.x);
+vec2 encoded_normal = octEncode(normal);
+o_normal = vec4(encoded_normal,0.0,pack.y);
+}
+#endif
+#endif
+#define MAX_BONES 80
+
+#ifdef DUAL_QUAT_SKINNING
+uniform vec4 u_boneRotQuats[ MAX_BONES ];
+uniform vec4 u_bonePosQuats[ MAX_BONES ];
+#else
+uniform mat4 u_boneMatrices[ MAX_BONES ];
+#endif
+#ifdef VERTEX
+in vec4 a_boneWeights;
+in uvec4 a_boneIndices;
+#ifdef DUAL_QUAT_SKINNING
+void apply_bone_transform(inout vec4 position, inout vec3 normal, inout vec3 tangent) {
+vec4 rotQuat0 = u_boneRotQuats[ a_boneIndices.x ];
+vec4 rotQuat1 = u_boneRotQuats[ a_boneIndices.y ];
+vec4 rotQuat2 = u_boneRotQuats[ a_boneIndices.z ];
+vec4 rotQuat3 = u_boneRotQuats[ a_boneIndices.w ];
+vec4 posQuat0 = u_bonePosQuats[ a_boneIndices.x ];
+vec4 posQuat1 = u_bonePosQuats[ a_boneIndices.y ];
+vec4 posQuat2 = u_bonePosQuats[ a_boneIndices.z ];
+vec4 posQuat3 = u_bonePosQuats[ a_boneIndices.w ];
+if (dot(rotQuat0, rotQuat1) < 0.0) { rotQuat1 = -rotQuat1; posQuat1 = -posQuat1; }
+if (dot(rotQuat0, rotQuat2) < 0.0) { rotQuat2 = -rotQuat2; posQuat2 = -posQuat2; }
+if (dot(rotQuat0, rotQuat3) < 0.0) { rotQuat3 = -rotQuat3; posQuat3 = -posQuat3; }
+vec4 rotQuat = rotQuat0*a_boneWeights.x + rotQuat1*a_boneWeights.y
++ rotQuat2*a_boneWeights.z + rotQuat3*a_boneWeights.w;
+vec4 posQuat = posQuat0*a_boneWeights.x + posQuat1*a_boneWeights.y
++ posQuat2*a_boneWeights.z + posQuat3*a_boneWeights.w;
+float len = length(rotQuat);
+rotQuat /= len;
+posQuat /= len;
+position.xyz += 2.0 * (
+cross( rotQuat.xyz, cross( rotQuat.xyz, position.xyz ) + rotQuat.w*position.xyz )
++ rotQuat.w*posQuat.xyz - posQuat.w*rotQuat.xyz + cross( rotQuat.xyz, posQuat.xyz )
+);
+normal += 2.0 * cross( rotQuat.xyz, cross( rotQuat.xyz, normal ) + rotQuat.w*normal );
+tangent += 2.0 * cross( rotQuat.xyz, cross( rotQuat.xyz, tangent ) + rotQuat.w*tangent );
+}
+void apply_bone_transform_position_only(inout vec4 position) {
+vec4 rotQuat0 = u_boneRotQuats[ a_boneIndices.x ];
+vec4 rotQuat1 = u_boneRotQuats[ a_boneIndices.y ];
+vec4 rotQuat2 = u_boneRotQuats[ a_boneIndices.z ];
+vec4 rotQuat3 = u_boneRotQuats[ a_boneIndices.w ];
+vec4 posQuat0 = u_bonePosQuats[ a_boneIndices.x ];
+vec4 posQuat1 = u_bonePosQuats[ a_boneIndices.y ];
+vec4 posQuat2 = u_bonePosQuats[ a_boneIndices.z ];
+vec4 posQuat3 = u_bonePosQuats[ a_boneIndices.w ];
+if (dot(rotQuat0, rotQuat1) < 0.0) { rotQuat1 = -rotQuat1; posQuat1 = -posQuat1; }
+if (dot(rotQuat0, rotQuat2) < 0.0) { rotQuat2 = -rotQuat2; posQuat2 = -posQuat2; }
+if (dot(rotQuat0, rotQuat3) < 0.0) { rotQuat3 = -rotQuat3; posQuat3 = -posQuat3; }
+vec4 rotQuat = rotQuat0*a_boneWeights.x + rotQuat1*a_boneWeights.y
++ rotQuat2*a_boneWeights.z + rotQuat3*a_boneWeights.w;
+vec4 posQuat = posQuat0*a_boneWeights.x + posQuat1*a_boneWeights.y
++ posQuat2*a_boneWeights.z + posQuat3*a_boneWeights.w;
+float len = length(rotQuat);
+rotQuat /= len;
+posQuat /= len;
+position.xyz += 2.0 * (
+cross( rotQuat.xyz, cross( rotQuat.xyz, position.xyz ) + rotQuat.w*position.xyz )
++ rotQuat.w*posQuat.xyz - posQuat.w*rotQuat.xyz + cross( rotQuat.xyz, posQuat.xyz )
+);
+}
+#else
+void apply_bone_transform(inout vec4 position, inout vec3 normal, inout vec3 tangent) {
+mat4 boneMatrix =
+u_boneMatrices[ a_boneIndices.x ] * a_boneWeights.x +
+u_boneMatrices[ a_boneIndices.y ] * a_boneWeights.y +
+u_boneMatrices[ a_boneIndices.z ] * a_boneWeights.z +
+u_boneMatrices[ a_boneIndices.w ] * a_boneWeights.w;
+position = boneMatrix * position;
+normal = (boneMatrix * vec4( normal, 0 )).xyz;
+tangent = (boneMatrix * vec4( tangent, 0 )).xyz;
+}
+void apply_bone_transform_position_only(inout vec4 position) {
+mat4 boneMatrix =
+u_boneMatrices[ a_boneIndices.x ] * a_boneWeights.x +
+u_boneMatrices[ a_boneIndices.y ] * a_boneWeights.y +
+u_boneMatrices[ a_boneIndices.z ] * a_boneWeights.z +
+u_boneMatrices[ a_boneIndices.w ] * a_boneWeights.w;
+position = boneMatrix * position;
+}
+#endif
+#endif
+#ifdef VERTEX
+in vec3 a_position;
+in vec3 a_normal;
+in vec2 a_uv;
+#ifdef INSTANCED
+in mat4 a_instance_model;
+in vec4 a_instance_data;
+flat out vec4 v_color;
+#endif
+out vec3 v_normal;
+out float v_along;
+void main() {
+#ifdef INSTANCED
+mat4 model = a_instance_model;
+mat4 mvp = u_vp * a_instance_model;
+v_color = a_instance_data;
+#else
+mat4 model = u_model;
+mat4 mvp = u_mvp;
+#endif
+vec4 position = vec4(a_position, 1.0);
+vec3 normal = a_normal;
+#ifdef DUAL_QUAT_SKINNING
+vec3 tangent = vec3(1.0, 0.0, 0.0);
+apply_bone_transform(position, normal, tangent);
+v_along = 1.0 - a_uv.y;
+#else
+v_along = a_position.z;
+#endif
+v_normal = normalize(transpose(inverse(mat3(model))) * normal);
+gl_Position = mvp * position;
+}
+#endif
+#ifdef FRAGMENT
+in vec3 v_normal;
+in float v_along;
+#ifdef INSTANCED
+flat in vec4 v_color;
+#endif
+void main() {
+#ifdef INSTANCED
+vec4 color = v_color;
+#else
+vec4 color = u_color;
+#endif
+vec3 rgb = color.rgb * (1.0 - 0.10 * (1.0 - v_along) * color.a);
+vec3 normal = normalize(v_normal);
+if (!gl_FrontFacing) {
+normal = -normal;
+}
+#ifdef OVERLAY
+vec3 key = normalize(vec3(0.35, -0.75, 0.55));
+float diffuse = max(dot(normal, key), 0.0);
+float rim = 0.5 + 0.5 * normal.z;
+vec3 lit = rgb * (0.30 + 0.85 * diffuse + 0.15 * rim);
+o_color = vec4(texture(u_lut, mix(vec3(0.5 / 32.0), vec3(31.5 / 32.0), clamp(lit, 0.0, 1.0))).rgb, 1.0);
+#else
+write_gbuffer(rgb, normal, vec4(0.4, 0.0, 0.0, 0.85));
+#endif
+}
+#endif
