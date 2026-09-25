@@ -15,8 +15,8 @@ const wasmPath = path.join(import.meta.dirname, "game.wasm");
 
 if (!fs.existsSync(wasmPath) || process.argv[2] === "--fetch") {
     const response = await fetch("https://apes.io/game/260916-28dd180-ls/game.wasm");
-    const data = await response.arrayBuffer();
-    fs.writeFileSync(wasmPath, new DataView(data));
+    const data = await response.bytes();
+    fs.writeFileSync(wasmPath, data);
 }
 
 const wasm = fs.readFileSync(wasmPath);
