@@ -47,6 +47,7 @@ function nextString() {
 
 const shadersPath = "shaders";
 
+fs.rmSync(shadersPath, { recursive: true, force: true });
 fs.mkdirSync(shadersPath, { recursive: true });
 
 for (let i = 0; start !== end; ++i) {
